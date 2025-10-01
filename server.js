@@ -5,7 +5,7 @@ import dotenv from "dotenv";
 import fetch from "node-fetch";
 import crypto from "crypto";
 import Stripe from "stripe";
-import cors from "cors";  // ✅ add cors
+import cors from "cors";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -16,10 +16,9 @@ const app = express();
 const PORT = process.env.PORT || 4000;
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
-// ✅ Enable CORS for your GitHub Pages frontend
 app.use(
   cors({
-    origin: "https://bigfoe313.github.io", // change if frontend URL changes
+    origin: "https://bigfoe313.github.io",
     methods: ["GET", "POST"],
     allowedHeaders: ["Content-Type"],
   })
@@ -288,6 +287,25 @@ app.post("/api/metamask-checkout", async (req, res) => {
     res.json({ cart });
   } catch (err) {
     res.status(500).json({ error: "Failed to build MetaMask checkout cart" });
+  }
+});
+
+// ✅ New image proxy endpoint
+app.get("/api/image-proxy", async (req, res) => {
+  try {
+    const url = req.query.url;
+    if (!url) return res.status(400).send("Missing url query");
+
+    const response = await fetch(url);
+    if (!response.ok) return res.status(502).send("Failed to fetch image");
+
+    const contentType = response.headers.get("content-type") || "image/jpeg";
+    res.set("Content-Type", contentType);
+    const buffer = await response.arrayBuffer();
+    res.send(Buffer.from(buffer));
+  } catch (err) {
+    console.error("Image proxy error:", err);
+    res.status(500).send("Image proxy failed");
   }
 });
 
