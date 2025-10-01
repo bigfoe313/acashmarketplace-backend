@@ -5,6 +5,7 @@ import dotenv from "dotenv";
 import fetch from "node-fetch";
 import crypto from "crypto";
 import Stripe from "stripe";
+import cors from "cors";  // ✅ add cors
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -14,6 +15,15 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 4000;
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
+
+// ✅ Enable CORS for your GitHub Pages frontend
+app.use(
+  cors({
+    origin: "https://bigfoe313.github.io", // change if frontend URL changes
+    methods: ["GET", "POST"],
+    allowedHeaders: ["Content-Type"],
+  })
+);
 
 app.use(express.json());
 
@@ -281,7 +291,7 @@ app.post("/api/metamask-checkout", async (req, res) => {
   }
 });
 
-// --- no frontend serving here ---
+// --- healthcheck ---
 app.get("/", (req, res) => {
   res.json({ status: "Backend API is running ✅" });
 });
