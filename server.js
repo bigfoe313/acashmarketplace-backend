@@ -9,28 +9,15 @@ import Stripe from "stripe";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-dotenv.config({ path: path.resolve(__dirname, "../.env") });
-
-console.log(
-  "✅ Loaded AliExpress APP_KEY:",
-  process.env.ALIEXPRESS_APP_KEY ? "[OK]" : "[MISSING]"
-);
-console.log(
-  "✅ Loaded AliExpress APP_SECRET:",
-  process.env.ALIEXPRESS_APP_SECRET ? "[OK]" : "[MISSING]"
-);
-console.log(
-  "✅ Loaded STRIPE_SECRET_KEY:",
-  process.env.STRIPE_SECRET_KEY ? "[OK]" : "[MISSING]"
-);
+dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 4000;
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
 app.use(express.json());
-app.use(express.static(path.join(__dirname, "../client")));
 
+// AliExpress base URL
 const ALIEXPRESS_BASE_URL = "https://api-sg.aliexpress.com/sync";
 
 // --- Helper: generate signed AliExpress URL ---
@@ -129,25 +116,7 @@ async function getSkuDetails(productId, skuId) {
   }
 }
 
-async function getMetaMaskCartData(product) {
-  const response = await fetch("/api/metamask-checkout", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      title: product.title,
-      price: product.price,
-      shipping_fee: product.shipping_fee,
-      image: product.image,
-      productId: product.id,
-      skuId: product.sku_id,
-    }),
-  });
-
-  const data = await response.json();
-  return data.cart; // server returns { cart }
-}
-
-// --- Search AliExpress products ---
+// --- AliExpress search ---
 async function searchAliExpress(query) {
   const appKey = process.env.ALIEXPRESS_APP_KEY;
   const appSecret = process.env.ALIEXPRESS_APP_SECRET;
@@ -156,17 +125,11 @@ async function searchAliExpress(query) {
   const params = {
     app_key: appKey,
     app_signature: "placeholder",
-    category_ids: "111,222,333",
-    delivery_days: 3,
-    fields: "commission_rate,sale_price,sku_id,tax_rate,first_level_category_name,second_level_category_name",
-    keywords: query,
     method: "aliexpress.affiliate.product.query",
+    keywords: query,
     page_no: 1,
     page_size: 20,
-    platform_product_type: "ALL",
-    promotion_name: "Business Top Sellers with Exclusive Price",
     ship_to_country: "US",
-    sort: "SALE_PRICE_ASC",
     target_currency: "USD",
     target_language: "EN",
     sign_method: "sha256",
@@ -189,8 +152,7 @@ async function searchAliExpress(query) {
     data.aliexpress_affiliate_product_query_response?.resp_result?.result?.products
       ?.product || [];
 
-  // 🔎 Filter out products where first_level_category_name contains "Shoes" or "Clothing"
-  // or second_level_category_name contains "Clothing"
+  // filter out clothing/shoes
   items = items.filter((item) => {
     const firstLevel = item.first_level_category_name || "";
     const secondLevel = item.second_level_category_name || "";
@@ -206,8 +168,6 @@ async function searchAliExpress(query) {
       return {
         id: item.product_id,
         sku_id: item.sku_id,
-        tax_rate: item.tax_rate,
-        target_sale_price: item.target_sale_price,
         title: item.product_title,
         price: (parseFloat(item.target_sale_price) * 1.5).toFixed(2),
         image: item.product_main_image_url,
@@ -221,23 +181,14 @@ async function searchAliExpress(query) {
   return mappedProducts.filter((p) => p !== null);
 }
 
-// --- NEW: SKU Details Endpoint for client-side use ---
-app.post("/api/sku-details", async (req, res) => {
-  const { productId, skuId } = req.body;
-  try {
-    const skuDetails = await getSkuDetails(productId, skuId);
-    res.json(skuDetails); // { color, skuImage }
-  } catch (err) {
-    console.error("SKU details endpoint error:", err);
-    res.status(500).json({ color: "", skuImage: "" });
-  }
-});
+/* =======================
+   API ROUTES
+   ======================= */
 
-// --- Search Endpoint ---
+// Search products
 app.get("/api/search", async (req, res) => {
   const query = req.query.q || "";
   if (!query) return res.status(400).json({ error: "Query is required" });
-
   try {
     const products = await searchAliExpress(query);
     res.json({ query, results: products });
@@ -247,17 +198,25 @@ app.get("/api/search", async (req, res) => {
   }
 });
 
-// --- Stripe Checkout Endpoint ---
+// SKU details
+app.post("/api/sku-details", async (req, res) => {
+  const { productId, skuId } = req.body;
+  try {
+    const skuDetails = await getSkuDetails(productId, skuId);
+    res.json(skuDetails);
+  } catch (err) {
+    res.status(500).json({ color: "", skuImage: "" });
+  }
+});
+
+// Stripe checkout
 app.post("/api/cart/add", async (req, res) => {
   try {
     const { title, price, shipping_fee, image, productId, skuId } = req.body;
-
-    // Fetch SKU details for color and SKU image
     const skuDetails = await getSkuDetails(productId, skuId);
     const color = skuDetails.color || "";
     const skuImage = skuDetails.skuImage || image;
 
-    // Calculate total = price + shipping
     const totalAmount = parseFloat(price) + parseFloat(shipping_fee);
 
     const session = await stripe.checkout.sessions.create({
@@ -267,7 +226,7 @@ app.post("/api/cart/add", async (req, res) => {
           price_data: {
             currency: "usd",
             product_data: {
-              name: `${title} ${productId}${color ? ` | ${color}` : ""}`,
+              name: `${title}${color ? ` | ${color}` : ""}`,
               images: [skuImage],
             },
             unit_amount: Math.round(totalAmount * 100),
@@ -276,43 +235,31 @@ app.post("/api/cart/add", async (req, res) => {
         },
       ],
       mode: "payment",
-      success_url: "http://localhost:4000/success.html",
-      cancel_url: "http://localhost:4000/cancel.html",
+      success_url: process.env.SUCCESS_URL || "https://your-frontend.com/success.html",
+      cancel_url: process.env.CANCEL_URL || "https://your-frontend.com/cancel.html",
     });
 
     res.json({ url: session.url });
   } catch (err) {
-    console.error("Stripe Error:", err);
     res.status(500).json({ error: "Failed to create checkout session" });
   }
 });
 
-// --- MetaMask Checkout Endpoint ---
+// MetaMask checkout
 app.post("/api/metamask-checkout", async (req, res) => {
   try {
     const { title, price, shipping_fee, image, productId, skuId } = req.body;
-
-    // Fetch SKU details (color + image)
     const skuDetails = await getSkuDetails(productId, skuId);
     const color = skuDetails.color || "";
     const skuImage = skuDetails.skuImage || image;
 
-    // Totals
     const basePrice = parseFloat(price);
     const shipping = parseFloat(shipping_fee) || 0;
     const discountTotal = basePrice * 0.9;
     const total = discountTotal + shipping;
 
-    // Cart response
-    // Normalize image URL so MetaMask can render it
     let normalizedImage = skuImage || image;
-
-    // Strip query params (MetaMask doesn’t handle long signed URLs well)
-    if (normalizedImage) {
-      normalizedImage = normalizedImage.split("?")[0];
-    }
-
-    // Force HTTPS (MetaMask needs https:// links)
+    if (normalizedImage) normalizedImage = normalizedImage.split("?")[0];
     if (normalizedImage && !normalizedImage.startsWith("http")) {
       normalizedImage = `https:${normalizedImage}`;
     }
@@ -321,7 +268,7 @@ app.post("/api/metamask-checkout", async (req, res) => {
       title,
       productId,
       color,
-      image: normalizedImage.replace(/ /g, "%20"), // replace spaces with %20
+      image: normalizedImage?.replace(/ /g, "%20"),
       price: basePrice,
       shipping,
       total,
@@ -330,16 +277,15 @@ app.post("/api/metamask-checkout", async (req, res) => {
 
     res.json({ cart });
   } catch (err) {
-    console.error("MetaMask Checkout Error:", err);
     res.status(500).json({ error: "Failed to build MetaMask checkout cart" });
   }
 });
 
-// --- Serve Frontend ---
-app.get("*", (req, res) => {
-  res.sendFile(path.join(__dirname, "../client/index.html"));
+// --- no frontend serving here ---
+app.get("/", (req, res) => {
+  res.json({ status: "Backend API is running ✅" });
 });
 
 app.listen(PORT, () => {
-  console.log(`🚀 Server running at http://localhost:${PORT}`);
+  console.log(`🚀 API server running on port ${PORT}`);
 });
