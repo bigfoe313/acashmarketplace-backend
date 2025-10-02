@@ -235,7 +235,7 @@ app.post("/api/cart/add", async (req, res) => {
           price_data: {
             currency: "usd",
             product_data: {
-              name: `${title}${color ? ` | ${color}` : ""}`,
+              name: `${title} ${productId}${color ? ` | ${color}` : ""}`,
               images: [skuImage],
             },
             unit_amount: Math.round(totalAmount * 100),
