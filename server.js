@@ -18,9 +18,11 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
 app.use(
   cors({
-    origin: "https://bigfoe313.github.io",
-    "https://www.acashmarketplace.com",
-    "https://acashmarketplace.com",
+    origin: [
+      "https://bigfoe313.github.io",
+      "https://www.acashmarketplace.com",
+      "https://acashmarketplace.com",
+    ],
     methods: ["GET", "POST"],
     allowedHeaders: ["Content-Type"],
   })
