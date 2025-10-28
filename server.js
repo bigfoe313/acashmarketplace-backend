@@ -254,8 +254,8 @@ app.post("/api/cart/add", async (req, res) => {
         },
       ],
       mode: "payment",
-      success_url: process.env.SUCCESS_URL || "https://your-frontend.com/success.html",
-      cancel_url: process.env.CANCEL_URL || "https://your-frontend.com/cancel.html",
+      success_url: process.env.SUCCESS_URL || "https://www.acashmarketplace.com/success.html",
+      cancel_url: process.env.CANCEL_URL || "https://www.acashmarketplace.com/cancel.html",
     });
 
     res.json({ url: session.url });
