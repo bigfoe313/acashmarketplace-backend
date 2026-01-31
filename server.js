@@ -231,35 +231,52 @@ app.post("/api/sku-details", async (req, res) => {
 // Stripe checkout
 app.post("/api/cart/add", async (req, res) => {
   try {
-    const { title, price, shipping_fee, image, productId, skuId } = req.body;
+    const { title, price, shipping_fee, stateSalesTax, image, productId, skuId } = req.body;
+
     const skuDetails = await getSkuDetails(productId, skuId);
     const color = skuDetails.color || "";
     const skuImage = skuDetails.skuImage || image;
 
-    const totalAmount = parseFloat(price) + parseFloat(shipping_fee);
+    const baseAmount = Math.round((parseFloat(price) + parseFloat(shipping_fee)) * 100);
+    const taxAmount = Math.round(parseFloat(stateSalesTax) * 100);
+
+    const line_items = [
+      {
+        price_data: {
+          currency: "usd",
+          product_data: {
+            name: `${title} ${productId}${color ? ` | ${color}` : ""}`,
+            images: [skuImage],
+          },
+          unit_amount: baseAmount,
+        },
+        quantity: 1,
+      }
+    ];
+
+    // Add tax separately if > 0
+    if (taxAmount > 0) {
+      line_items.push({
+        price_data: {
+          currency: "usd",
+          product_data: { name: `Sales Tax` },
+          unit_amount: taxAmount,
+        },
+        quantity: 1,
+      });
+    }
 
     const session = await stripe.checkout.sessions.create({
       payment_method_types: ["card"],
-      line_items: [
-        {
-          price_data: {
-            currency: "usd",
-            product_data: {
-              name: `${title} ${productId}${color ? ` | ${color}` : ""}`,
-              images: [skuImage],
-            },
-            unit_amount: Math.round(totalAmount * 100),
-          },
-          quantity: 1,
-        },
-      ],
       mode: "payment",
-      success_url: process.env.SUCCESS_URL || "https://www.acashmarketplace.com/success.html",
-      cancel_url: process.env.CANCEL_URL || "https://www.acashmarketplace.com/cancel.html",
+      line_items,
+      success_url: process.env.SUCCESS_URL,
+      cancel_url: process.env.CANCEL_URL
     });
 
     res.json({ url: session.url });
   } catch (err) {
+    console.error("Stripe session error:", err);
     res.status(500).json({ error: "Failed to create checkout session" });
   }
 });
