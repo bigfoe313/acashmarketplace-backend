@@ -228,38 +228,63 @@ app.post("/api/sku-details", async (req, res) => {
   }
 });
 
-// Stripe checkout
+// Stripe checkout with safe sales tax handling
 app.post("/api/cart/add", async (req, res) => {
   try {
-    const { title, price, shipping_fee, image, productId, skuId } = req.body;
+    const { title, price, shipping_fee, stateSalesTax, image, productId, skuId } = req.body;
+
+    // Get SKU details (color + SKU image)
     const skuDetails = await getSkuDetails(productId, skuId);
     const color = skuDetails.color || "";
     const skuImage = skuDetails.skuImage || image;
 
-    const totalAmount = parseFloat(price) + parseFloat(shipping_fee);
+    // Convert amounts to numbers and cents
+    const baseAmount = Math.round((Number(price) + Number(shipping_fee)) * 100);
 
+    // Safely parse sales tax, default to 0 if invalid
+    const taxAmount = Number.isFinite(Number(stateSalesTax))
+      ? Math.round(Number(stateSalesTax) * 100)
+      : 0;
+
+    // Build line items for Stripe
+    const line_items = [
+      {
+        price_data: {
+          currency: "usd",
+          product_data: {
+            name: `${title} ${productId}${color ? ` | ${color}` : ""}`,
+            images: [skuImage],
+          },
+          unit_amount: baseAmount,
+        },
+        quantity: 1,
+      },
+    ];
+
+    // Include sales tax as a separate line item if > 0
+    if (taxAmount > 0) {
+      line_items.push({
+        price_data: {
+          currency: "usd",
+          product_data: { name: "Sales Tax" },
+          unit_amount: taxAmount,
+        },
+        quantity: 1,
+      });
+    }
+
+    // Create Stripe checkout session
     const session = await stripe.checkout.sessions.create({
       payment_method_types: ["card"],
-      line_items: [
-        {
-          price_data: {
-            currency: "usd",
-            product_data: {
-              name: `${title} ${productId}${color ? ` | ${color}` : ""}`,
-              images: [skuImage],
-            },
-            unit_amount: Math.round(totalAmount * 100),
-          },
-          quantity: 1,
-        },
-      ],
       mode: "payment",
+      line_items,
       success_url: process.env.SUCCESS_URL || "https://www.acashmarketplace.com/success.html",
       cancel_url: process.env.CANCEL_URL || "https://www.acashmarketplace.com/cancel.html",
     });
 
     res.json({ url: session.url });
   } catch (err) {
+    console.error("Stripe session error:", err);
     res.status(500).json({ error: "Failed to create checkout session" });
   }
 });
