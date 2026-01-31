@@ -30,12 +30,10 @@ app.use(
 
 app.use(express.json());
 
+// AliExpress base URL
 const ALIEXPRESS_BASE_URL = "https://api-sg.aliexpress.com/sync";
 
-/* =======================
-   HELPERS (UNCHANGED)
-   ======================= */
-
+// --- Helper: generate signed AliExpress URL ---
 function generateSignedUrl(params, secret) {
   const sortedKeys = Object.keys(params).sort();
   const signString = sortedKeys.map((k) => `${k}${params[k]}`).join("");
@@ -50,94 +48,223 @@ function generateSignedUrl(params, secret) {
     .join("&")}&sign=${signature}`;
 }
 
-/* ... ALL OTHER ALIEXPRESS + SKU FUNCTIONS UNCHANGED ... */
+// --- Fetch shipping info per product ---
+async function getShippingInfo(product) {
+  const appKey = process.env.ALIEXPRESS_APP_KEY;
+  const appSecret = process.env.ALIEXPRESS_APP_SECRET;
+
+  const params = {
+    app_key: appKey,
+    app_signature: "placeholder",
+    method: "aliexpress.affiliate.product.shipping.get",
+    product_id: product.product_id,
+    sku_id: product.sku_id || "",
+    ship_to_country: "US",
+    target_currency: "USD",
+    target_sale_price: product.target_sale_price,
+    target_language: "EN",
+    tax_rate: product.tax_rate || 0,
+    sign_method: "sha256",
+    timestamp: Date.now().toString(),
+  };
+
+  try {
+    const url = generateSignedUrl(params, appSecret);
+    const response = await fetch(url);
+    const text = await response.text();
+    let data;
+    try {
+      data = JSON.parse(text);
+    } catch (e) {
+      return { shipping_fee: "0", min_delivery_days: "N/A", max_delivery_days: "N/A" };
+    }
+    const result =
+      data.aliexpress_affiliate_product_shipping_get_response?.resp_result?.result || {};
+    return {
+      shipping_fee: result.shipping_fee || "0",
+      min_delivery_days: result.min_delivery_days || "N/A",
+      max_delivery_days: result.max_delivery_days || "N/A",
+    };
+  } catch (err) {
+    return { shipping_fee: "0", min_delivery_days: "N/A", max_delivery_days: "N/A" };
+  }
+}
+
+// --- Fetch SKU-specific details ---
+async function getSkuDetails(productId, skuId) {
+  const appKey = process.env.ALIEXPRESS_APP_KEY;
+  const appSecret = process.env.ALIEXPRESS_APP_SECRET;
+
+  const params = {
+    app_key: appKey,
+    app_signature: "placeholder",
+    method: "aliexpress.affiliate.product.sku.detail.get",
+    product_id: productId,
+    sku_ids: skuId,
+    ship_to_country: "US",
+    target_currency: "USD",
+    target_language: "EN",
+    need_deliver_info: "No",
+    sign_method: "sha256",
+    timestamp: Date.now().toString(),
+  };
+
+  try {
+    const url = generateSignedUrl(params, appSecret);
+    const response = await fetch(url);
+    const text = await response.text();
+    const data = JSON.parse(text);
+
+    const skuInfo =
+      data.aliexpress_affiliate_product_sku_detail_get_response?.result?.result
+        ?.ae_item_sku_info?.traffic_sku_info_list?.[0] || {};
+
+    return {
+      color: skuInfo.color || "",
+      skuImage: skuInfo.sku_image_link || "",
+    };
+  } catch (err) {
+    console.error("SKU API error:", err);
+    return { color: "", skuImage: "" };
+  }
+}
+
+// --- AliExpress search ---
+async function searchAliExpress(query) {
+  const appKey = process.env.ALIEXPRESS_APP_KEY;
+  const appSecret = process.env.ALIEXPRESS_APP_SECRET;
+  if (!appKey || !appSecret) throw new Error("App Key or Secret missing in .env");
+
+  const params = {
+    app_key: appKey,
+    app_signature: "placeholder",
+    category_ids: "111,222,333",
+    delivery_days: 3,
+    fields: "commission_rate,sale_price,sku_id,tax_rate,first_level_category_name,second_level_category_name",
+    keywords: query,
+    method: "aliexpress.affiliate.product.query",
+    page_no: 1,
+    page_size: 20,
+    platform_product_type: "ALL",
+    promotion_name: "Business Top Sellers with Exclusive Price",
+    ship_to_country: "US",
+    sort: "SALE_PRICE_ASC",
+    target_currency: "USD",
+    target_language: "EN",
+    sign_method: "sha256",
+    timestamp: Date.now().toString(),
+  };
+
+  const url = generateSignedUrl(params, appSecret);
+  const response = await fetch(url);
+  const text = await response.text();
+  if (!response.ok) throw new Error(`AliExpress API error: ${response.status}`);
+
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch (e) {
+    throw new Error("Invalid JSON response from AliExpress");
+  }
+
+  let items =
+    data.aliexpress_affiliate_product_query_response?.resp_result?.result?.products
+      ?.product || [];
+
+  // filter out clothing/shoes
+  items = items.filter((item) => {
+    const firstLevel = item.first_level_category_name || "";
+    const secondLevel = item.second_level_category_name || "";
+    return !firstLevel.includes("Shoes") &&
+           !firstLevel.includes("Clothing") &&
+           !secondLevel.includes("Clothing");
+  });
+
+  const mappedProducts = await Promise.all(
+    items.map(async (item) => {
+      const shipping = await getShippingInfo(item);
+      if (!shipping.shipping_fee) return null;
+      return {
+        id: item.product_id,
+        sku_id: item.sku_id,
+        title: item.product_title,
+        price: (parseFloat(item.target_sale_price) * 1.5).toFixed(2),
+        image: item.product_main_image_url,
+        shipping_fee: shipping.shipping_fee,
+        min_delivery_days: shipping.min_delivery_days,
+        max_delivery_days: shipping.max_delivery_days,
+      };
+    })
+  );
+
+  return mappedProducts.filter((p) => p !== null);
+}
 
 /* =======================
-   STRIPE CHECKOUT (UPDATED)
+   API ROUTES
    ======================= */
 
+// Search products
+app.get("/api/search", async (req, res) => {
+  const query = req.query.q || "";
+  if (!query) return res.status(400).json({ error: "Query is required" });
+  try {
+    const products = await searchAliExpress(query);
+    res.json({ query, results: products });
+  } catch (err) {
+    console.error("API Error:", err);
+    res.status(500).json({ error: "Failed to fetch products" });
+  }
+});
+
+// SKU details
+app.post("/api/sku-details", async (req, res) => {
+  const { productId, skuId } = req.body;
+  try {
+    const skuDetails = await getSkuDetails(productId, skuId);
+    res.json(skuDetails);
+  } catch (err) {
+    res.status(500).json({ color: "", skuImage: "" });
+  }
+});
+
+// Stripe checkout
 app.post("/api/cart/add", async (req, res) => {
   try {
-    const {
-      title,
-      price,
-      shipping_fee,
-      stateSalesTax = 0,
-      image,
-      productId,
-      skuId
-    } = req.body;
-
+    const { title, price, shipping_fee, image, productId, skuId } = req.body;
     const skuDetails = await getSkuDetails(productId, skuId);
     const color = skuDetails.color || "";
     const skuImage = skuDetails.skuImage || image;
 
-    const lineItems = [];
-
-    // 🔹 Product
-    lineItems.push({
-      price_data: {
-        currency: "usd",
-        product_data: {
-          name: `${title} ${productId}${color ? ` | ${color}` : ""}`,
-          images: [skuImage],
-        },
-        unit_amount: Math.round(Number(price) * 100),
-      },
-      quantity: 1,
-    });
-
-    // 🔹 Shipping
-    if (Number(shipping_fee) > 0) {
-      lineItems.push({
-        price_data: {
-          currency: "usd",
-          product_data: {
-            name: "Shipping",
-          },
-          unit_amount: Math.round(Number(shipping_fee) * 100),
-        },
-        quantity: 1,
-      });
-    }
-
-    // 🔹 Sales Tax (NEW)
-    if (Number(stateSalesTax) > 0) {
-      lineItems.push({
-        price_data: {
-          currency: "usd",
-          product_data: {
-            name: "Sales Tax",
-          },
-          unit_amount: Math.round(Number(stateSalesTax) * 100),
-        },
-        quantity: 1,
-      });
-    }
+    const totalAmount = parseFloat(price) + parseFloat(shipping_fee);
 
     const session = await stripe.checkout.sessions.create({
       payment_method_types: ["card"],
+      line_items: [
+        {
+          price_data: {
+            currency: "usd",
+            product_data: {
+              name: `${title} ${productId}${color ? ` | ${color}` : ""}`,
+              images: [skuImage],
+            },
+            unit_amount: Math.round(totalAmount * 100),
+          },
+          quantity: 1,
+        },
+      ],
       mode: "payment",
-      line_items: lineItems,
-      success_url:
-        process.env.SUCCESS_URL ||
-        "https://www.acashmarketplace.com/success.html",
-      cancel_url:
-        process.env.CANCEL_URL ||
-        "https://www.acashmarketplace.com/cancel.html",
+      success_url: process.env.SUCCESS_URL || "https://www.acashmarketplace.com/success.html",
+      cancel_url: process.env.CANCEL_URL || "https://www.acashmarketplace.com/cancel.html",
     });
 
     res.json({ url: session.url });
   } catch (err) {
-    console.error("Stripe checkout error:", err);
     res.status(500).json({ error: "Failed to create checkout session" });
   }
 });
 
-/* =======================
-   METAMASK CHECKOUT (UNCHANGED)
-   ======================= */
-
+// MetaMask checkout
 app.post("/api/metamask-checkout", async (req, res) => {
   try {
     const { title, price, shipping_fee, image, productId, skuId } = req.body;
@@ -173,10 +300,7 @@ app.post("/api/metamask-checkout", async (req, res) => {
   }
 });
 
-/* =======================
-   IMAGE PROXY + HEALTHCHECK
-   ======================= */
-
+// ✅ New image proxy endpoint
 app.get("/api/image-proxy", async (req, res) => {
   try {
     const url = req.query.url;
@@ -185,14 +309,17 @@ app.get("/api/image-proxy", async (req, res) => {
     const response = await fetch(url);
     if (!response.ok) return res.status(502).send("Failed to fetch image");
 
-    res.set("Content-Type", response.headers.get("content-type") || "image/jpeg");
+    const contentType = response.headers.get("content-type") || "image/jpeg";
+    res.set("Content-Type", contentType);
     const buffer = await response.arrayBuffer();
     res.send(Buffer.from(buffer));
   } catch (err) {
+    console.error("Image proxy error:", err);
     res.status(500).send("Image proxy failed");
   }
 });
 
+// --- healthcheck ---
 app.get("/", (req, res) => {
   res.json({ status: "Backend API is running ✅" });
 });
