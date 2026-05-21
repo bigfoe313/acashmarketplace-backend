@@ -278,6 +278,9 @@ app.post("/api/cart/add", async (req, res) => {
       payment_method_types: ["card"],
       mode: "payment",
       line_items,
+shipping_address_collection: {
+  allowed_countries: ['US']
+},
       success_url: process.env.SUCCESS_URL || "https://www.acashmarketplace.com/success.html",
       cancel_url: process.env.CANCEL_URL || "https://www.acashmarketplace.com/cancel.html",
     });
