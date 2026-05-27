@@ -217,6 +217,17 @@ app.get("/api/search", async (req, res) => {
   }
 });
 
+// Featured products endpoint
+app.get("/api/products", async (req, res) => {
+  try {
+    const products = await searchAliExpress("electronics");
+    res.json(products);
+  } catch (err) {
+    console.error("Products API Error:", err);
+    res.status(500).json({ error: "Failed to fetch featured products" });
+  }
+});
+
 // SKU details
 app.post("/api/sku-details", async (req, res) => {
   const { productId, skuId } = req.body;
