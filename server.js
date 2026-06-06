@@ -143,7 +143,10 @@ async function getSkuDetails(productId, skuId) {
 async function searchAliExpress(query) {
   const appKey = process.env.ALIEXPRESS_APP_KEY;
   const appSecret = process.env.ALIEXPRESS_APP_SECRET;
-  if (!appKey || !appSecret) throw new Error("App Key or Secret missing in .env");
+
+  if (!appKey || !appSecret) {
+    throw new Error("Missing AliExpress credentials");
+  }
 
   const params = {
     app_key: appKey,
@@ -158,50 +161,50 @@ async function searchAliExpress(query) {
     sign_method: "sha256",
     timestamp: Date.now().toString(),
   };
-  
+
   const url = generateSignedUrl(params, appSecret);
   const response = await fetch(url);
   const text = await response.text();
-  if (!response.ok) throw new Error(`AliExpress API error: ${response.status}`);
+
+  if (!response.ok) {
+    throw new Error(`AliExpress API error: ${response.status} - ${text.slice(0, 200)}`);
+  }
 
   let data;
   try {
     data = JSON.parse(text);
-  } catch (e) {
-    throw new Error("Invalid JSON response from AliExpress");
+  } catch {
+    throw new Error("Invalid JSON from AliExpress");
   }
 
-  let items =
-    data.aliexpress_affiliate_product_query_response?.resp_result?.result?.products
-      ?.product || [];
+  const items =
+    data?.aliexpress_affiliate_product_query_response?.resp_result?.result?.products?.product;
 
-  // filter out clothing/shoes
-  items = items.filter((item) => {
-    const firstLevel = item.first_level_category_name || "";
-    const secondLevel = item.second_level_category_name || "";
-    return !firstLevel.includes("Shoes") &&
-           !firstLevel.includes("Clothing") &&
-           !secondLevel.includes("Clothing");
-  });
+  if (!Array.isArray(items)) return [];
 
-  const mappedProducts = await Promise.all(
+  const mapped = await Promise.all(
     items.map(async (item) => {
-      const shipping = await getShippingInfo(item);
-      if (!shipping.shipping_fee) return null;
+      let shipping = {};
+      try {
+        shipping = await getShippingInfo(item);
+      } catch {
+        shipping = { shipping_fee: "0", min_delivery_days: "N/A", max_delivery_days: "N/A" };
+      }
+
       return {
         id: item.product_id,
         sku_id: item.sku_id,
         title: item.product_title,
-        price: (parseFloat(item.target_sale_price) * 1.5).toFixed(2),
+        price: (parseFloat(item.target_sale_price || 0) * 1.5).toFixed(2),
         image: item.product_main_image_url,
-        shipping_fee: shipping.shipping_fee,
-        min_delivery_days: shipping.min_delivery_days,
-        max_delivery_days: shipping.max_delivery_days,
+        shipping_fee: shipping.shipping_fee || "0",
+        min_delivery_days: shipping.min_delivery_days || "N/A",
+        max_delivery_days: shipping.max_delivery_days || "N/A",
       };
     })
   );
 
-  return mappedProducts.filter((p) => p !== null);
+  return mapped;
 }
 
 /* =======================
