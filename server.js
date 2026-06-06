@@ -143,10 +143,7 @@ async function getSkuDetails(productId, skuId) {
 async function searchAliExpress(query) {
   const appKey = process.env.ALIEXPRESS_APP_KEY;
   const appSecret = process.env.ALIEXPRESS_APP_SECRET;
-
-  if (!appKey || !appSecret) {
-    throw new Error("Missing AliExpress credentials");
-  }
+  if (!appKey || !appSecret) throw new Error("App Key or Secret missing in .env");
 
   const params = {
     app_key: appKey,
@@ -162,35 +159,49 @@ async function searchAliExpress(query) {
     timestamp: Date.now().toString(),
   };
 
+  console.log("PARAMS:", JSON.stringify(params, null, 2));
+  console.log("APP KEY:", appKey);
   const url = generateSignedUrl(params, appSecret);
   const response = await fetch(url);
   const text = await response.text();
 
-  if (!response.ok) {
-    throw new Error(`AliExpress API error: ${response.status} - ${text.slice(0, 200)}`);
-  }
+  // ✅ Add this line
+  console.log("🌐 AliExpress API raw response snippet:", text.slice(0, 300));
+
+  if (!response.ok) throw new Error(`AliExpress API error: ${response.status}`);
+  if (!response.ok) throw new Error(`AliExpress API error: ${response.status}`);
 
   let data;
   try {
     data = JSON.parse(text);
-  } catch {
-    throw new Error("Invalid JSON from AliExpress");
+  } catch (e) {
+    throw new Error("Invalid JSON response from AliExpress");
   }
 
-  const items =
-    data?.aliexpress_affiliate_product_query_response?.resp_result?.result?.products?.product;
+  let items =
+    data?.aliexpress_affiliate_product_query_response
+        ?.resp_result
+        ?.result
+        ?.products
+        ?.product || [];
 
-  if (!Array.isArray(items)) return [];
+  if (!Array.isArray(items)) {
+    items = [];
+  }
 
-  const mapped = await Promise.all(
+  // filter out clothing/shoes
+  items = items.filter((item) => {
+    const firstLevel = item.first_level_category_name || "";
+    const secondLevel = item.second_level_category_name || "";
+    return !firstLevel.includes("Shoes") &&
+           !firstLevel.includes("Clothing") &&
+           !secondLevel.includes("Clothing");
+  });
+
+  const mappedProducts = await Promise.all(
     items.map(async (item) => {
-      let shipping = {};
-      try {
-        shipping = await getShippingInfo(item);
-      } catch {
-        shipping = { shipping_fee: "0", min_delivery_days: "N/A", max_delivery_days: "N/A" };
-      }
-
+      const shipping = await getShippingInfo(item);
+      // never filter out product based on shipping
       return {
         id: item.product_id,
         sku_id: item.sku_id,
@@ -204,7 +215,7 @@ async function searchAliExpress(query) {
     })
   );
 
-  return mapped;
+  return mappedProducts.filter((p) => p !== null);
 }
 
 /* =======================
