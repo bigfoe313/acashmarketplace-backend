@@ -36,10 +36,20 @@ const ALIEXPRESS_BASE_URL = "https://api-sg.aliexpress.com/sync";
 // --- Helper: generate signed AliExpress URL ---
 function generateSignedUrl(params, secret) {
   const sortedKeys = Object.keys(params).sort();
-  const signString = sortedKeys.map((k) => `${k}${params[k]}`).join("");
+
+  let signString = "";
+
+  for (const key of sortedKeys) {
+    const value = params[key];
+
+    if (value !== undefined && value !== null && value !== "") {
+      signString += key + String(value);
+    }
+  }
+
   const signature = crypto
-    .createHmac("sha256", secret)
-    .update(signString)
+    .createHash("sha256")
+    .update(secret + signString + secret)
     .digest("hex")
     .toUpperCase();
 
@@ -137,24 +147,18 @@ async function searchAliExpress(query) {
 
   const params = {
     app_key: appKey,
-    app_signature: "placeholder",
-    category_ids: "111,222,333",
-    delivery_days: 3,
-    fields: "commission_rate,sale_price,sku_id,tax_rate,first_level_category_name,second_level_category_name",
-    keywords: query,
     method: "aliexpress.affiliate.product.query",
+    keywords: query,
     page_no: 1,
     page_size: 20,
-    platform_product_type: "ALL",
-    promotion_name: "Business Top Sellers with Exclusive Price",
     ship_to_country: "US",
-    sort: "SALE_PRICE_ASC",
     target_currency: "USD",
     target_language: "EN",
+    tracking_id: "acashmarketplace",
     sign_method: "sha256",
     timestamp: Date.now().toString(),
   };
-
+  
   const url = generateSignedUrl(params, appSecret);
   const response = await fetch(url);
   const text = await response.text();
