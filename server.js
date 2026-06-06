@@ -41,11 +41,23 @@ function generateSignedUrl(params, secret) {
 
   for (const key of sortedKeys) {
     const value = params[key];
-
     if (value !== undefined && value !== null && value !== "") {
       signString += key + String(value);
     }
   }
+
+  const signature = crypto
+    .createHash("md5") // 🔥 FIXED
+    .update(secret + signString + secret)
+    .digest("hex")
+    .toUpperCase();
+
+  const query = sortedKeys
+    .map((k) => `${k}=${encodeURIComponent(params[k])}`)
+    .join("&");
+
+  return `${ALIEXPRESS_BASE_URL}?${query}&sign=${signature}`;
+}
 
   const signature = crypto
     .createHash("sha256")
