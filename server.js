@@ -75,7 +75,7 @@ async function getShippingInfo(product) {
     target_sale_price: product.target_sale_price,
     target_language: "EN",
     tax_rate: product.tax_rate || 0,
-    sign_method: "sha256",
+    sign_method: "md5",
     timestamp: Date.now().toString(),
   };
 
@@ -116,7 +116,7 @@ async function getSkuDetails(productId, skuId) {
     target_currency: "USD",
     target_language: "EN",
     need_deliver_info: "No",
-    sign_method: "sha256",
+    sign_method: "md5",
     timestamp: Date.now().toString(),
   };
 
@@ -156,7 +156,7 @@ async function searchAliExpress(query) {
     target_currency: "USD",
     target_language: "EN",
     tracking_id: "acashmarketplace",
-    sign_method: "sha256",
+    sign_method: "md5",
     timestamp: Date.now().toString(),
   };
 
