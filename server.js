@@ -171,6 +171,7 @@ async function searchAliExpress(query) {
     keywords: query,
     page_no: 1,
     page_size: 50,
+    sort: "LAST_VOLUME_DESC",
     ship_to_country: "US",
     target_currency: "USD",
     target_language: "EN",
@@ -235,16 +236,24 @@ async function searchAliExpress(query) {
     })
   );
 
-  return mappedProducts
-    .filter(p => p !== null)
+  const validProducts = mappedProducts.filter(p => p !== null);
+  
+  const rankedProducts = validProducts
     .map(product => ({
-      ...product,
-      _relevanceScore: getRelevanceScore(product.title, query)
+      product,
+      score: getRelevanceScore(product.title, query)
     }))
-    .filter(product => product._relevanceScore > 0)
-    .sort((a, b) => b._relevanceScore - a._relevanceScore)
-    .slice(0, 20)
-    .map(({ _relevanceScore, ...product }) => product);
+    .sort((a, b) => b.score - a.score);
+  
+  const relevantProducts = rankedProducts.filter(
+    item => item.score > 0
+  );
+  
+  const selectedProducts = relevantProducts.length >= 5
+    ? relevantProducts.map(item => item.product)
+    : validProducts;
+  
+  return selectedProducts.slice(0, 20);
 }
 
 /* =======================
