@@ -59,25 +59,6 @@ function generateSignedUrl(params, secret) {
   return `${ALIEXPRESS_BASE_URL}?${query}&sign=${signature}`;
 }
 
-
-function getRelevanceScore(title, query) {
-  const normalizedTitle = String(title || "").toLowerCase();
-  const normalizedQuery = String(query || "").toLowerCase().trim();
-
-  const words = [...new Set(normalizedQuery.match(/[a-z0-9]+/g) || [])];
-  if (!words.length || !normalizedTitle) return 0;
-
-  const titleWords = new Set(normalizedTitle.match(/[a-z0-9]+/g) || []);
-  const matchedWords = words.filter(word => titleWords.has(word));
-
-  if (matchedWords.length === 0) return 0;
-
-  const wordCoverage = matchedWords.length / words.length;
-  const exactPhraseBonus = normalizedTitle.includes(normalizedQuery) ? 2 : 0;
-
-  return wordCoverage + exactPhraseBonus;
-}
-
 // --- Fetch shipping info per product ---
 async function getShippingInfo(product) {
   const appKey = process.env.ALIEXPRESS_APP_KEY;
@@ -170,8 +151,7 @@ async function searchAliExpress(query) {
     method: "aliexpress.affiliate.product.query",
     keywords: query,
     page_no: 1,
-    page_size: 50,
-    sort: "LAST_VOLUME_DESC",
+    page_size: 20,
     ship_to_country: "US",
     target_currency: "USD",
     target_language: "EN",
@@ -236,24 +216,7 @@ async function searchAliExpress(query) {
     })
   );
 
-  const validProducts = mappedProducts.filter(p => p !== null);
-  
-  const rankedProducts = validProducts
-    .map(product => ({
-      product,
-      score: getRelevanceScore(product.title, query)
-    }))
-    .sort((a, b) => b.score - a.score);
-  
-  const relevantProducts = rankedProducts.filter(
-    item => item.score > 0
-  );
-  
-  const selectedProducts = relevantProducts.length >= 5
-    ? relevantProducts.map(item => item.product)
-    : validProducts;
-  
-  return selectedProducts.slice(0, 20);
+  return mappedProducts.filter((p) => p !== null);
 }
 
 /* =======================
