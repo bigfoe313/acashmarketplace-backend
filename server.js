@@ -59,6 +59,17 @@ function generateSignedUrl(params, secret) {
   return `${ALIEXPRESS_BASE_URL}?${query}&sign=${signature}`;
 }
 
+  const signature = crypto
+    .createHash("sha256")
+    .update(secret + signString + secret)
+    .digest("hex")
+    .toUpperCase();
+
+  return `${ALIEXPRESS_BASE_URL}?${sortedKeys
+    .map((k) => `${k}=${encodeURIComponent(params[k])}`)
+    .join("&")}&sign=${signature}`;
+}
+
 // --- Fetch shipping info per product ---
 async function getShippingInfo(product) {
   const appKey = process.env.ALIEXPRESS_APP_KEY;
@@ -75,7 +86,7 @@ async function getShippingInfo(product) {
     target_sale_price: product.target_sale_price,
     target_language: "EN",
     tax_rate: product.tax_rate || 0,
-    sign_method: "md5",
+    sign_method: "sha256",
     timestamp: Date.now().toString(),
   };
 
@@ -116,7 +127,7 @@ async function getSkuDetails(productId, skuId) {
     target_currency: "USD",
     target_language: "EN",
     need_deliver_info: "No",
-    sign_method: "md5",
+    sign_method: "sha256",
     timestamp: Date.now().toString(),
   };
 
@@ -156,7 +167,7 @@ async function searchAliExpress(query) {
     target_currency: "USD",
     target_language: "EN",
     tracking_id: "acashmarketplace",
-    sign_method: "md5",
+    sign_method: "sha256",
     timestamp: Date.now().toString(),
   };
 
