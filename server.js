@@ -59,17 +59,6 @@ function generateSignedUrl(params, secret) {
   return `${ALIEXPRESS_BASE_URL}?${query}&sign=${signature}`;
 }
 
-  const signature = crypto
-    .createHash("sha256")
-    .update(secret + signString + secret)
-    .digest("hex")
-    .toUpperCase();
-
-  return `${ALIEXPRESS_BASE_URL}?${sortedKeys
-    .map((k) => `${k}=${encodeURIComponent(params[k])}`)
-    .join("&")}&sign=${signature}`;
-}
-
 // --- Fetch shipping info per product ---
 async function getShippingInfo(product) {
   const appKey = process.env.ALIEXPRESS_APP_KEY;
