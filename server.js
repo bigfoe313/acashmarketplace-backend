@@ -152,7 +152,6 @@ async function searchAliExpress(query) {
     keywords: query,
     page_no: 1,
     page_size: 50,
-    sort: "LAST_VOLUME_DESC",
     ship_to_country: "US",
     target_currency: "USD",
     target_language: "EN",
