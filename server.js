@@ -198,6 +198,140 @@ async function getSkuDetails(productId, skuId) {
   }
 }
 
+
+// Normalize search phrases and product text
+function normalizeText(value = "") {
+  return String(value)
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+// Generic product accessory exclusions.
+// These are product-type indicators, not individual products.
+const accessoryTerms = [
+  "bag",
+  "backpack",
+  "case",
+  "cover",
+  "sleeve",
+  "stand",
+  "holder",
+  "mount",
+  "sticker",
+  "decal",
+  "skin",
+  "screen protector",
+  "keyboard cover",
+  "desk mat",
+  "mouse pad",
+  "replacement battery",
+  "charger",
+  "cable",
+  "adapter",
+  "cleaning kit"
+];
+
+// Determine whether the search is for laptop computers.
+function getSearchIntent(query) {
+  const q = normalizeText(query);
+
+  if (
+    /\b(laptop|laptops|notebook computer|notebook computers)\b/.test(q)
+  ) {
+    return {
+      type: "laptop",
+      requiredTerms: ["laptop", "notebook computer", "notebook pc"],
+      excludedTerms: accessoryTerms
+    };
+  }
+
+  return {
+    type: "general",
+    requiredTerms: q.split(" ").filter(word => word.length > 2),
+    excludedTerms: []
+  };
+}
+
+// Determine whether a product is an accessory.
+function containsExcludedTerm(text, terms) {
+  return terms.some(term => {
+    const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return new RegExp(`\\b${escaped}\\b`, "i").test(text);
+  });
+}
+
+// Evaluate the relevance of one AliExpress product.
+function scoreProduct(item, intent) {
+  const title = normalizeText(item.product_title);
+  const category = normalizeText(
+    `${item.first_level_category_name || ""} ${
+      item.second_level_category_name || ""
+    }`
+  );
+
+  if (intent.type === "laptop") {
+    // Reject clear accessories.
+    if (containsExcludedTerm(title, intent.excludedTerms)) {
+      return 0;
+    }
+
+    // Require evidence that the product is a computer.
+    const computerTerms = [
+      "laptop",
+      "notebook computer",
+      "notebook pc"
+    ];
+
+    const titleMatch = computerTerms.some(term =>
+      title.includes(term)
+    );
+
+    if (!titleMatch) {
+      return 0;
+    }
+
+    let score = 10;
+
+    // Category evidence adds confidence.
+    if (
+      category.includes("computer") ||
+      category.includes("laptop") ||
+      category.includes("notebook")
+    ) {
+      score += 5;
+    }
+
+    return score;
+  }
+
+  // General searches: score products using the search words.
+  const terms = intent.requiredTerms;
+
+  if (terms.length === 0) return 1;
+
+  const matched = terms.filter(term =>
+    title.includes(term) || category.includes(term)
+  ).length;
+
+  return matched / terms.length;
+}
+
+// Reusable product relevance filter.
+function filterRelevantProducts(items, query) {
+  const intent = getSearchIntent(query);
+
+  return items
+    .map(item => ({
+      item,
+      relevance: scoreProduct(item, intent)
+    }))
+    .filter(result => result.relevance > 0)
+    .sort((a, b) => b.relevance - a.relevance)
+    .map(result => result.item);
+}
+
 // --- AliExpress search ---
 async function searchAliExpress(query) {
   const appKey = process.env.ALIEXPRESS_APP_KEY;
@@ -277,14 +411,18 @@ async function searchAliExpress(query) {
     categoryCounts
   );
   
-  // filter out clothing/shoes
+  // Apply existing clothing/shoes exclusions
   items = items.filter((item) => {
     const firstLevel = item.first_level_category_name || "";
     const secondLevel = item.second_level_category_name || "";
+  
     return !firstLevel.includes("Shoes") &&
            !firstLevel.includes("Clothing") &&
            !secondLevel.includes("Clothing");
   });
+  
+  // Apply reusable search relevance filtering
+  items = filterRelevantProducts(items, query);
 /*
   // TEMPORARY TEST: Filter camera-glasses search results
   if (query.toLowerCase().includes("camera glasses")) {
