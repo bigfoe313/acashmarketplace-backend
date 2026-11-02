@@ -333,10 +333,17 @@ function filterRelevantProducts(items, query) {
 }
 
 // --- AliExpress search ---
+
 async function searchAliExpress(query) {
   const appKey = process.env.ALIEXPRESS_APP_KEY;
   const appSecret = process.env.ALIEXPRESS_APP_SECRET;
-  if (!appKey || !appSecret) throw new Error("App Key or Secret missing in .env");
+
+  if (!appKey || !appSecret) {
+    throw new Error("App Key or Secret missing in .env");
+  }
+
+  // Retrieve and combine three pages of AliExpress results.
+  let allItems = [];
 
   for (let page = 1; page <= 3; page++) {
     const params = {
@@ -352,43 +359,63 @@ async function searchAliExpress(query) {
       sign_method: "md5",
       timestamp: Date.now().toString(),
     };
-  
-    // Sign request, fetch results, and add products to a combined array.
-  }
 
-  console.log("PARAMS:", JSON.stringify(params, null, 2));
-  console.log("APP KEY:", appKey);
-  const url = generateSignedUrl(params, appSecret);
-  const response = await fetch(url);
-  const text = await response.text();
+    console.log("SEARCH KEYWORD:", query, "PAGE:", page);
+    console.log("PARAMS:", JSON.stringify(params, null, 2));
 
-  // ✅ Add this line
-  console.log("🌐 AliExpress API raw response snippet:", text.slice(0, 300));
+    const url = generateSignedUrl(params, appSecret);
+    const response = await fetch(url);
+    const text = await response.text();
 
-  if (!response.ok) throw new Error(`AliExpress API error: ${response.status}`);
-  if (!response.ok) throw new Error(`AliExpress API error: ${response.status}`);
+    console.log(
+      `ALIEXPRESS PAGE ${page} RAW RESPONSE:`,
+      text.slice(0, 300)
+    );
 
-  let data;
-  try {
-    data = JSON.parse(text);
-  } catch (e) {
-    throw new Error("Invalid JSON response from AliExpress");
-  }
+    if (!response.ok) {
+      throw new Error(`AliExpress API error on page ${page}: ${response.status}`);
+    }
 
-  let items =
-    data?.aliexpress_affiliate_product_query_response
+    let data;
+
+    try {
+      data = JSON.parse(text);
+    } catch (e) {
+      throw new Error(`Invalid JSON response from AliExpress on page ${page}`);
+    }
+
+    let pageItems =
+      data?.aliexpress_affiliate_product_query_response
         ?.resp_result
         ?.result
         ?.products
         ?.product || [];
 
-  if (!Array.isArray(items)) {
-    items = [];
+    if (!Array.isArray(pageItems)) {
+      pageItems = [];
+    }
+
+    console.log(`PAGE ${page} PRODUCT COUNT:`, pageItems.length);
+
+    allItems.push(...pageItems);
   }
 
-  // TEMPORARY DIAGNOSTIC LOGGING
+  console.log("TOTAL PRODUCTS BEFORE DEDUPLICATION:", allItems.length);
+
+  // Remove duplicate products across pages.
+  const uniqueItems = [
+    ...new Map(
+      allItems.map(item => [String(item.product_id), item])
+    ).values()
+  ];
+
+  let items = uniqueItems;
+
+  console.log("TOTAL UNIQUE PRODUCTS:", items.length);
+
+  // Diagnostic category logging.
   console.log("SEARCH KEYWORD:", query);
-  
+
   console.log(
     "ALIEXPRESS CATEGORY RESULTS:",
     items.map(item => ({
@@ -400,59 +427,59 @@ async function searchAliExpress(query) {
   );
 
   const categoryCounts = {};
-  
+
   items.forEach(item => {
     const id = item.second_level_category_id;
     const name = item.second_level_category_name || "Unknown";
-  
     const key = `${id} - ${name}`;
-  
+
     categoryCounts[key] = (categoryCounts[key] || 0) + 1;
   });
-  
-  console.log(
-    "CATEGORY DISTRIBUTION:",
-    categoryCounts
-  );
-  
-  // Apply existing clothing/shoes exclusions
+
+  console.log("CATEGORY DISTRIBUTION:", categoryCounts);
+
+  // Apply existing clothing/shoes exclusions.
   items = items.filter((item) => {
     const firstLevel = item.first_level_category_name || "";
     const secondLevel = item.second_level_category_name || "";
-  
+
     return !firstLevel.includes("Shoes") &&
            !firstLevel.includes("Clothing") &&
            !secondLevel.includes("Clothing");
   });
-  
-  // Apply reusable search relevance filtering
+
+  // Apply reusable search relevance filtering.
   items = filterRelevantProducts(items, query);
-/*
-  // TEMPORARY TEST: Filter camera-glasses search results
+
+  /*
+  // TEMPORARY TEST: Filter camera-glasses search results.
   if (query.toLowerCase().includes("camera glasses")) {
     const allowedCategories = [
       "100000306",
       "200003803",
       "202216602"
     ];
-  
+
     items = items.filter(item => {
       const categoryId = String(item.second_level_category_id);
       const title = (item.product_title || "").toLowerCase();
-  
+
       const hasCamera = /\b(camera|photo|video|recording)\b/.test(title);
       const hasGlasses =
         /\b(glasses|eyewear|sunglasses|smart glasses)\b/.test(title);
-  
+
       return allowedCategories.includes(categoryId) &&
              hasCamera &&
              hasGlasses;
     });
   }
-*/  
-  // First map products without making shipping API calls
+  */
+
+  console.log("PRODUCTS AFTER RELEVANCE FILTER:", items.length);
+
+  // First map products without making shipping API calls.
   const candidates = items.slice(0, 15);
-  
+
   const mappedProducts = candidates.map(item => ({
     id: item.product_id,
     sku_id: item.sku_id,
@@ -463,27 +490,27 @@ async function searchAliExpress(query) {
     min_delivery_days: "N/A",
     max_delivery_days: "N/A",
   }));
-  
-  // Fetch shipping information with controlled concurrency
+
+  // Fetch shipping information with controlled concurrency.
   let nextIndex = 0;
-  
+
   async function shippingWorker() {
     while (nextIndex < candidates.length) {
       const index = nextIndex++;
-  
+
       const shipping = await getShippingInfo(candidates[index]);
-  
+
       mappedProducts[index].shipping_fee = shipping.shipping_fee;
       mappedProducts[index].min_delivery_days = shipping.min_delivery_days;
       mappedProducts[index].max_delivery_days = shipping.max_delivery_days;
     }
   }
-  
+
   await Promise.all([
     shippingWorker(),
     shippingWorker()
   ]);
-  
+
   return mappedProducts;
 }
 
