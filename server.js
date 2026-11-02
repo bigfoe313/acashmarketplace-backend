@@ -248,6 +248,19 @@ async function searchAliExpress(query) {
     items = [];
   }
 
+  // TEMPORARY DIAGNOSTIC LOGGING
+  console.log("SEARCH KEYWORD:", query);
+  
+  console.log(
+    "ALIEXPRESS CATEGORY RESULTS:",
+    items.map(item => ({
+      title: item.product_title,
+      first_category: item.first_level_category_name,
+      second_category: item.second_level_category_name,
+      second_category_id: item.second_level_category_id
+    }))
+  );
+  
   // filter out clothing/shoes
   items = items.filter((item) => {
     const firstLevel = item.first_level_category_name || "";
