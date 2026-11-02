@@ -286,6 +286,21 @@ async function searchAliExpress(query) {
            !secondLevel.includes("Clothing");
   });
 
+  // TEMPORARY TEST: Keep likely camera-glasses categories
+  if (query.toLowerCase().includes("camera glasses")) {
+    const allowedCategories = [
+      "100000306",
+      "200003803",
+      "202216602"
+    ];
+  
+    items = items.filter(item =>
+      allowedCategories.includes(
+        String(item.second_level_category_id)
+      )
+    );
+  }
+  
   // First map products without making shipping API calls
   const candidates = items.slice(0, 15);
   
