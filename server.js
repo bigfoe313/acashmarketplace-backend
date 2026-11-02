@@ -59,23 +59,8 @@ function generateSignedUrl(params, secret) {
   return `${ALIEXPRESS_BASE_URL}?${query}&sign=${signature}`;
 }
 
-// Cache successful shipping results for 6 hours
-const shippingCache = new Map();
-const SHIPPING_CACHE_TTL = 6 * 60 * 60 * 1000;
-
-const sleep = (ms) =>
-  new Promise(resolve => setTimeout(resolve, ms));
-
+// --- Fetch shipping info per product ---
 async function getShippingInfo(product) {
-  const cacheKey =
-    `${product.product_id}_${product.sku_id || ""}_US_USD`;
-
-  const cached = shippingCache.get(cacheKey);
-
-  if (cached && Date.now() - cached.timestamp < SHIPPING_CACHE_TTL) {
-    return cached.data;
-  }
-
   const appKey = process.env.ALIEXPRESS_APP_KEY;
   const appSecret = process.env.ALIEXPRESS_APP_SECRET;
 
@@ -94,69 +79,26 @@ async function getShippingInfo(product) {
     timestamp: Date.now().toString(),
   };
 
-  for (let attempt = 0; attempt < 3; attempt++) {
+  try {
+    const url = generateSignedUrl(params, appSecret);
+    const response = await fetch(url);
+    const text = await response.text();
+    let data;
     try {
-      const url = generateSignedUrl(params, appSecret);
-      const response = await fetch(url);
-      const text = await response.text();
-
-      let data;
-
-      try {
-        data = JSON.parse(text);
-      } catch (e) {
-        return {
-          shipping_fee: "0",
-          min_delivery_days: "N/A",
-          max_delivery_days: "N/A"
-        };
-      }
-
-      // Retry AliExpress rate-limit errors
-      if (text.includes("ApiCallLimit")) {
-        if (attempt < 2) {
-          await sleep(1100 * (attempt + 1));
-          continue;
-        }
-      }
-
-      const result =
-        data.aliexpress_affiliate_product_shipping_get_response
-          ?.resp_result?.result || {};
-
-      const shipping = {
-        shipping_fee: result.shipping_fee || "0",
-        min_delivery_days: result.min_delivery_days || "N/A",
-        max_delivery_days: result.max_delivery_days || "N/A",
-      };
-
-      // Cache only successful shipping estimates
-      if (
-        shipping.min_delivery_days !== "N/A" &&
-        shipping.max_delivery_days !== "N/A"
-      ) {
-        shippingCache.set(cacheKey, {
-          data: shipping,
-          timestamp: Date.now()
-        });
-      }
-
-      return shipping;
-
-    } catch (err) {
-      console.error("Shipping API error:", err);
-
-      if (attempt < 2) {
-        await sleep(1100 * (attempt + 1));
-      }
+      data = JSON.parse(text);
+    } catch (e) {
+      return { shipping_fee: "0", min_delivery_days: "N/A", max_delivery_days: "N/A" };
     }
+    const result =
+      data.aliexpress_affiliate_product_shipping_get_response?.resp_result?.result || {};
+    return {
+      shipping_fee: result.shipping_fee || "0",
+      min_delivery_days: result.min_delivery_days || "N/A",
+      max_delivery_days: result.max_delivery_days || "N/A",
+    };
+  } catch (err) {
+    return { shipping_fee: "0", min_delivery_days: "N/A", max_delivery_days: "N/A" };
   }
-
-  return {
-    shipping_fee: "0",
-    min_delivery_days: "N/A",
-    max_delivery_days: "N/A"
-  };
 }
 
 // --- Fetch SKU-specific details ---
@@ -198,320 +140,84 @@ async function getSkuDetails(productId, skuId) {
   }
 }
 
-
-// Normalize search phrases and product text
-function normalizeText(value = "") {
-  return String(value)
-    .toLowerCase()
-    .replace(/[^a-z0-9\s]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-// Generic product accessory exclusions.
-// These are product-type indicators, not individual products.
-const accessoryTerms = [
-  "bag",
-  "backpack",
-  "case",
-  "cover",
-  "sleeve",
-  "stand",
-  "holder",
-  "mount",
-  "sticker",
-  "decal",
-  "skin",
-  "screen protector",
-  "keyboard cover",
-  "desk mat",
-  "mouse pad",
-  "replacement battery",
-  "charger",
-  "cable",
-  "adapter",
-  "cleaning kit"
-];
-
-// Determine whether the search is for laptop computers.
-function getSearchIntent(query) {
-  const q = normalizeText(query);
-
-  if (
-    /\b(laptop|laptops|notebook computer|notebook computers)\b/.test(q)
-  ) {
-    return {
-      type: "laptop",
-      requiredTerms: ["laptop", "notebook computer", "notebook pc"],
-      excludedTerms: accessoryTerms
-    };
-  }
-
-  return {
-    type: "general",
-    requiredTerms: q.split(" ").filter(word => word.length > 2),
-    excludedTerms: []
-  };
-}
-
-// Determine whether a product is an accessory.
-function containsExcludedTerm(text, terms) {
-  return terms.some(term => {
-    const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    return new RegExp(`\\b${escaped}\\b`, "i").test(text);
-  });
-}
-
-// Evaluate the relevance of one AliExpress product.
-function scoreProduct(item, intent) {
-  const title = normalizeText(item.product_title);
-  const category = normalizeText(
-    `${item.first_level_category_name || ""} ${
-      item.second_level_category_name || ""
-    }`
-  );
-
-  if (intent.type === "laptop") {
-    // Reject clear accessories.
-    if (containsExcludedTerm(title, intent.excludedTerms)) {
-      return 0;
-    }
-
-    // Require evidence that the product is a computer.
-    const computerTerms = [
-      "laptop",
-      "notebook computer",
-      "notebook pc"
-    ];
-
-    const titleMatch = computerTerms.some(term =>
-      title.includes(term)
-    );
-
-    if (!titleMatch) {
-      return 0;
-    }
-
-    let score = 10;
-
-    // Category evidence adds confidence.
-    if (
-      category.includes("computer") ||
-      category.includes("laptop") ||
-      category.includes("notebook")
-    ) {
-      score += 5;
-    }
-
-    return score;
-  }
-
-  // General searches: score products using the search words.
-  const terms = intent.requiredTerms;
-
-  if (terms.length === 0) return 1;
-
-  const matched = terms.filter(term =>
-    title.includes(term) || category.includes(term)
-  ).length;
-
-  return matched / terms.length;
-}
-
-// Reusable product relevance filter.
-function filterRelevantProducts(items, query) {
-  const intent = getSearchIntent(query);
-
-  return items
-    .map(item => ({
-      item,
-      relevance: scoreProduct(item, intent)
-    }))
-    .filter(result => result.relevance > 0)
-    .sort((a, b) => b.relevance - a.relevance)
-    .map(result => result.item);
-}
-
 // --- AliExpress search ---
-
 async function searchAliExpress(query) {
   const appKey = process.env.ALIEXPRESS_APP_KEY;
   const appSecret = process.env.ALIEXPRESS_APP_SECRET;
+  if (!appKey || !appSecret) throw new Error("App Key or Secret missing in .env");
 
-  if (!appKey || !appSecret) {
-    throw new Error("App Key or Secret missing in .env");
+  const params = {
+    app_key: appKey,
+    method: "aliexpress.affiliate.product.query",
+    keywords: query,
+    page_no: 1,
+    page_size: 50,
+    sort: "LAST_VOLUME_DESC",
+    ship_to_country: "US",
+    target_currency: "USD",
+    target_language: "EN",
+    tracking_id: "acashmarketplace",
+    sign_method: "md5",
+    timestamp: Date.now().toString(),
+  };
+
+  console.log("PARAMS:", JSON.stringify(params, null, 2));
+  console.log("APP KEY:", appKey);
+  const url = generateSignedUrl(params, appSecret);
+  const response = await fetch(url);
+  const text = await response.text();
+
+  // ✅ Add this line
+  console.log("🌐 AliExpress API raw response snippet:", text.slice(0, 300));
+
+  if (!response.ok) throw new Error(`AliExpress API error: ${response.status}`);
+  if (!response.ok) throw new Error(`AliExpress API error: ${response.status}`);
+
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch (e) {
+    throw new Error("Invalid JSON response from AliExpress");
   }
 
-  // Retrieve and combine three pages of AliExpress results.
-  let allItems = [];
-
-  for (let page = 1; page <= 3; page++) {
-    const params = {
-      app_key: appKey,
-      method: "aliexpress.affiliate.product.query",
-      keywords: query,
-      page_no: page,
-      page_size: 50,
-      ship_to_country: "US",
-      target_currency: "USD",
-      target_language: "EN",
-      tracking_id: "acashmarketplace",
-      sign_method: "md5",
-      timestamp: Date.now().toString(),
-    };
-
-    console.log("SEARCH KEYWORD:", query, "PAGE:", page);
-    console.log("PARAMS:", JSON.stringify(params, null, 2));
-
-    const url = generateSignedUrl(params, appSecret);
-    const response = await fetch(url);
-    const text = await response.text();
-
-    console.log(
-      `ALIEXPRESS PAGE ${page} RAW RESPONSE:`,
-      text.slice(0, 300)
-    );
-
-    if (!response.ok) {
-      throw new Error(`AliExpress API error on page ${page}: ${response.status}`);
-    }
-
-    let data;
-
-    try {
-      data = JSON.parse(text);
-    } catch (e) {
-      throw new Error(`Invalid JSON response from AliExpress on page ${page}`);
-    }
-
-    let pageItems =
-      data?.aliexpress_affiliate_product_query_response
+  let items =
+    data?.aliexpress_affiliate_product_query_response
         ?.resp_result
         ?.result
         ?.products
         ?.product || [];
 
-    if (!Array.isArray(pageItems)) {
-      pageItems = [];
-    }
-
-    console.log(`PAGE ${page} PRODUCT COUNT:`, pageItems.length);
-
-    allItems.push(...pageItems);
+  if (!Array.isArray(items)) {
+    items = [];
   }
 
-  console.log("TOTAL PRODUCTS BEFORE DEDUPLICATION:", allItems.length);
-
-  // Remove duplicate products across pages.
-  const uniqueItems = [
-    ...new Map(
-      allItems.map(item => [String(item.product_id), item])
-    ).values()
-  ];
-
-  let items = uniqueItems;
-
-  console.log("TOTAL UNIQUE PRODUCTS:", items.length);
-
-  // Diagnostic category logging.
-  console.log("SEARCH KEYWORD:", query);
-
-  console.log(
-    "ALIEXPRESS CATEGORY RESULTS:",
-    items.map(item => ({
-      title: item.product_title,
-      first_category: item.first_level_category_name,
-      second_category: item.second_level_category_name,
-      second_category_id: item.second_level_category_id
-    }))
-  );
-
-  const categoryCounts = {};
-
-  items.forEach(item => {
-    const id = item.second_level_category_id;
-    const name = item.second_level_category_name || "Unknown";
-    const key = `${id} - ${name}`;
-
-    categoryCounts[key] = (categoryCounts[key] || 0) + 1;
-  });
-
-  console.log("CATEGORY DISTRIBUTION:", categoryCounts);
-
-  // Apply existing clothing/shoes exclusions.
+  // filter out clothing/shoes
   items = items.filter((item) => {
     const firstLevel = item.first_level_category_name || "";
     const secondLevel = item.second_level_category_name || "";
-
     return !firstLevel.includes("Shoes") &&
            !firstLevel.includes("Clothing") &&
            !secondLevel.includes("Clothing");
   });
 
-  // Apply reusable search relevance filtering.
-  items = filterRelevantProducts(items, query);
+  const mappedProducts = await Promise.all(
+    items.map(async (item) => {
+      const shipping = await getShippingInfo(item);
+      // never filter out product based on shipping
+      return {
+        id: item.product_id,
+        sku_id: item.sku_id,
+        title: item.product_title,
+        price: (parseFloat(item.target_sale_price || 0) * 1.5).toFixed(2),
+        image: item.product_main_image_url,
+        shipping_fee: shipping.shipping_fee || "0",
+        min_delivery_days: shipping.min_delivery_days || "N/A",
+        max_delivery_days: shipping.max_delivery_days || "N/A",
+      };
+    })
+  );
 
-  /*
-  // TEMPORARY TEST: Filter camera-glasses search results.
-  if (query.toLowerCase().includes("camera glasses")) {
-    const allowedCategories = [
-      "100000306",
-      "200003803",
-      "202216602"
-    ];
-
-    items = items.filter(item => {
-      const categoryId = String(item.second_level_category_id);
-      const title = (item.product_title || "").toLowerCase();
-
-      const hasCamera = /\b(camera|photo|video|recording)\b/.test(title);
-      const hasGlasses =
-        /\b(glasses|eyewear|sunglasses|smart glasses)\b/.test(title);
-
-      return allowedCategories.includes(categoryId) &&
-             hasCamera &&
-             hasGlasses;
-    });
-  }
-  */
-
-  console.log("PRODUCTS AFTER RELEVANCE FILTER:", items.length);
-
-  // First map products without making shipping API calls.
-  const candidates = items.slice(0, 15);
-
-  const mappedProducts = candidates.map(item => ({
-    id: item.product_id,
-    sku_id: item.sku_id,
-    title: item.product_title,
-    price: (parseFloat(item.target_sale_price || 0) * 1.5).toFixed(2),
-    image: item.product_main_image_url,
-    shipping_fee: "0",
-    min_delivery_days: "N/A",
-    max_delivery_days: "N/A",
-  }));
-
-  // Fetch shipping information with controlled concurrency.
-  let nextIndex = 0;
-
-  async function shippingWorker() {
-    while (nextIndex < candidates.length) {
-      const index = nextIndex++;
-
-      const shipping = await getShippingInfo(candidates[index]);
-
-      mappedProducts[index].shipping_fee = shipping.shipping_fee;
-      mappedProducts[index].min_delivery_days = shipping.min_delivery_days;
-      mappedProducts[index].max_delivery_days = shipping.max_delivery_days;
-    }
-  }
-
-  await Promise.all([
-    shippingWorker(),
-    shippingWorker()
-  ]);
-
-  return mappedProducts;
+  return mappedProducts.filter((p) => p !== null);
 }
 
 /* =======================
