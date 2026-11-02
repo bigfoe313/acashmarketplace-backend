@@ -338,19 +338,23 @@ async function searchAliExpress(query) {
   const appSecret = process.env.ALIEXPRESS_APP_SECRET;
   if (!appKey || !appSecret) throw new Error("App Key or Secret missing in .env");
 
-  const params = {
-    app_key: appKey,
-    method: "aliexpress.affiliate.product.query",
-    keywords: query,
-    page_no: 1,
-    page_size: 50,
-    ship_to_country: "US",
-    target_currency: "USD",
-    target_language: "EN",
-    tracking_id: "acashmarketplace",
-    sign_method: "md5",
-    timestamp: Date.now().toString(),
-  };
+  for (let page = 1; page <= 3; page++) {
+    const params = {
+      app_key: appKey,
+      method: "aliexpress.affiliate.product.query",
+      keywords: query,
+      page_no: page,
+      page_size: 50,
+      ship_to_country: "US",
+      target_currency: "USD",
+      target_language: "EN",
+      tracking_id: "acashmarketplace",
+      sign_method: "md5",
+      timestamp: Date.now().toString(),
+    };
+  
+    // Sign request, fetch results, and add products to a combined array.
+  }
 
   console.log("PARAMS:", JSON.stringify(params, null, 2));
   console.log("APP KEY:", appKey);
