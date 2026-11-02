@@ -260,6 +260,22 @@ async function searchAliExpress(query) {
       second_category_id: item.second_level_category_id
     }))
   );
+
+  const categoryCounts = {};
+  
+  items.forEach(item => {
+    const id = item.second_level_category_id;
+    const name = item.second_level_category_name || "Unknown";
+  
+    const key = `${id} - ${name}`;
+  
+    categoryCounts[key] = (categoryCounts[key] || 0) + 1;
+  });
+  
+  console.log(
+    "CATEGORY DISTRIBUTION:",
+    categoryCounts
+  );
   
   // filter out clothing/shoes
   items = items.filter((item) => {
