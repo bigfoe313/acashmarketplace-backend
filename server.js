@@ -59,8 +59,23 @@ function generateSignedUrl(params, secret) {
   return `${ALIEXPRESS_BASE_URL}?${query}&sign=${signature}`;
 }
 
-// --- Fetch shipping info per product ---
+// Cache successful shipping results for 6 hours
+const shippingCache = new Map();
+const SHIPPING_CACHE_TTL = 6 * 60 * 60 * 1000;
+
+const sleep = (ms) =>
+  new Promise(resolve => setTimeout(resolve, ms));
+
 async function getShippingInfo(product) {
+  const cacheKey =
+    `${product.product_id}_${product.sku_id || ""}_US_USD`;
+
+  const cached = shippingCache.get(cacheKey);
+
+  if (cached && Date.now() - cached.timestamp < SHIPPING_CACHE_TTL) {
+    return cached.data;
+  }
+
   const appKey = process.env.ALIEXPRESS_APP_KEY;
   const appSecret = process.env.ALIEXPRESS_APP_SECRET;
 
@@ -79,26 +94,69 @@ async function getShippingInfo(product) {
     timestamp: Date.now().toString(),
   };
 
-  try {
-    const url = generateSignedUrl(params, appSecret);
-    const response = await fetch(url);
-    const text = await response.text();
-    let data;
+  for (let attempt = 0; attempt < 3; attempt++) {
     try {
-      data = JSON.parse(text);
-    } catch (e) {
-      return { shipping_fee: "0", min_delivery_days: "N/A", max_delivery_days: "N/A" };
+      const url = generateSignedUrl(params, appSecret);
+      const response = await fetch(url);
+      const text = await response.text();
+
+      let data;
+
+      try {
+        data = JSON.parse(text);
+      } catch (e) {
+        return {
+          shipping_fee: "0",
+          min_delivery_days: "N/A",
+          max_delivery_days: "N/A"
+        };
+      }
+
+      // Retry AliExpress rate-limit errors
+      if (text.includes("ApiCallLimit")) {
+        if (attempt < 2) {
+          await sleep(1100 * (attempt + 1));
+          continue;
+        }
+      }
+
+      const result =
+        data.aliexpress_affiliate_product_shipping_get_response
+          ?.resp_result?.result || {};
+
+      const shipping = {
+        shipping_fee: result.shipping_fee || "0",
+        min_delivery_days: result.min_delivery_days || "N/A",
+        max_delivery_days: result.max_delivery_days || "N/A",
+      };
+
+      // Cache only successful shipping estimates
+      if (
+        shipping.min_delivery_days !== "N/A" &&
+        shipping.max_delivery_days !== "N/A"
+      ) {
+        shippingCache.set(cacheKey, {
+          data: shipping,
+          timestamp: Date.now()
+        });
+      }
+
+      return shipping;
+
+    } catch (err) {
+      console.error("Shipping API error:", err);
+
+      if (attempt < 2) {
+        await sleep(1100 * (attempt + 1));
+      }
     }
-    const result =
-      data.aliexpress_affiliate_product_shipping_get_response?.resp_result?.result || {};
-    return {
-      shipping_fee: result.shipping_fee || "0",
-      min_delivery_days: result.min_delivery_days || "N/A",
-      max_delivery_days: result.max_delivery_days || "N/A",
-    };
-  } catch (err) {
-    return { shipping_fee: "0", min_delivery_days: "N/A", max_delivery_days: "N/A" };
   }
+
+  return {
+    shipping_fee: "0",
+    min_delivery_days: "N/A",
+    max_delivery_days: "N/A"
+  };
 }
 
 // --- Fetch SKU-specific details ---
@@ -199,24 +257,41 @@ async function searchAliExpress(query) {
            !secondLevel.includes("Clothing");
   });
 
-  const mappedProducts = await Promise.all(
-    items.map(async (item) => {
-      const shipping = await getShippingInfo(item);
-      // never filter out product based on shipping
-      return {
-        id: item.product_id,
-        sku_id: item.sku_id,
-        title: item.product_title,
-        price: (parseFloat(item.target_sale_price || 0) * 1.5).toFixed(2),
-        image: item.product_main_image_url,
-        shipping_fee: shipping.shipping_fee || "0",
-        min_delivery_days: shipping.min_delivery_days || "N/A",
-        max_delivery_days: shipping.max_delivery_days || "N/A",
-      };
-    })
-  );
-
-  return mappedProducts.filter((p) => p !== null);
+  // First map products without making shipping API calls
+  const candidates = items.slice(0, 15);
+  
+  const mappedProducts = candidates.map(item => ({
+    id: item.product_id,
+    sku_id: item.sku_id,
+    title: item.product_title,
+    price: (parseFloat(item.target_sale_price || 0) * 1.5).toFixed(2),
+    image: item.product_main_image_url,
+    shipping_fee: "0",
+    min_delivery_days: "N/A",
+    max_delivery_days: "N/A",
+  }));
+  
+  // Fetch shipping information with controlled concurrency
+  let nextIndex = 0;
+  
+  async function shippingWorker() {
+    while (nextIndex < candidates.length) {
+      const index = nextIndex++;
+  
+      const shipping = await getShippingInfo(candidates[index]);
+  
+      mappedProducts[index].shipping_fee = shipping.shipping_fee;
+      mappedProducts[index].min_delivery_days = shipping.min_delivery_days;
+      mappedProducts[index].max_delivery_days = shipping.max_delivery_days;
+    }
+  }
+  
+  await Promise.all([
+    shippingWorker(),
+    shippingWorker()
+  ]);
+  
+  return mappedProducts;
 }
 
 /* =======================
