@@ -285,7 +285,7 @@ async function searchAliExpress(query) {
            !firstLevel.includes("Clothing") &&
            !secondLevel.includes("Clothing");
   });
-
+/*
   // TEMPORARY TEST: Filter camera-glasses search results
   if (query.toLowerCase().includes("camera glasses")) {
     const allowedCategories = [
@@ -307,7 +307,7 @@ async function searchAliExpress(query) {
              hasGlasses;
     });
   }
-  
+*/  
   // First map products without making shipping API calls
   const candidates = items.slice(0, 15);
   
