@@ -141,7 +141,7 @@ async function getSkuDetails(productId, skuId) {
 }
 
 // --- AliExpress search ---
-async function searchAliExpress(query) {
+async function searchAliExpress(query, categoryId = "") {
   const appKey = process.env.ALIEXPRESS_APP_KEY;
   const appSecret = process.env.ALIEXPRESS_APP_SECRET;
   if (!appKey || !appSecret) throw new Error("App Key or Secret missing in .env");
@@ -227,10 +227,20 @@ async function searchAliExpress(query) {
 // Search products
 app.get("/api/search", async (req, res) => {
   const query = req.query.q || "";
-  if (!query) return res.status(400).json({ error: "Query is required" });
+  const categoryId = req.query.categoryId || "";
+
+  if (!query && !categoryId) {
+    return res.status(400).json({ error: "Query or category is required" });
+  }
+
   try {
-    const products = await searchAliExpress(query);
-    res.json({ query, results: products });
+    const products = await searchAliExpress(query, categoryId);
+
+    res.json({
+      query,
+      categoryId,
+      results: products
+    });
   } catch (err) {
     console.error("API Error:", err);
     res.status(500).json({ error: "Failed to fetch products" });
