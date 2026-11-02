@@ -286,7 +286,7 @@ async function searchAliExpress(query) {
            !secondLevel.includes("Clothing");
   });
 
-  // TEMPORARY TEST: Keep likely camera-glasses categories
+  // TEMPORARY TEST: Filter camera-glasses search results
   if (query.toLowerCase().includes("camera glasses")) {
     const allowedCategories = [
       "100000306",
@@ -294,11 +294,18 @@ async function searchAliExpress(query) {
       "202216602"
     ];
   
-    items = items.filter(item =>
-      allowedCategories.includes(
-        String(item.second_level_category_id)
-      )
-    );
+    items = items.filter(item => {
+      const categoryId = String(item.second_level_category_id);
+      const title = (item.product_title || "").toLowerCase();
+  
+      const hasCamera = /\b(camera|photo|video|recording)\b/.test(title);
+      const hasGlasses =
+        /\b(glasses|eyewear|sunglasses|smart glasses)\b/.test(title);
+  
+      return allowedCategories.includes(categoryId) &&
+             hasCamera &&
+             hasGlasses;
+    });
   }
   
   // First map products without making shipping API calls
