@@ -161,6 +161,10 @@ async function searchAliExpress(query, categoryId = "") {
     timestamp: Date.now().toString(),
   };
 
+  if (categoryId) {
+    params.category_ids = String(categoryId);
+  }
+
   console.log("PARAMS:", JSON.stringify(params, null, 2));
   console.log("APP KEY:", appKey);
   const url = generateSignedUrl(params, appSecret);
@@ -220,6 +224,84 @@ async function searchAliExpress(query, categoryId = "") {
   return mappedProducts.filter((p) => p !== null);
 }
 
+// --- Retrieve AliExpress categories ---
+let aliExpressCategoriesCache = null;
+
+async function getAliExpressCategories() {
+  if (aliExpressCategoriesCache) {
+    return aliExpressCategoriesCache;
+  }
+
+  const appKey = process.env.ALIEXPRESS_APP_KEY;
+  const appSecret = process.env.ALIEXPRESS_APP_SECRET;
+
+  if (!appKey || !appSecret) {
+    throw new Error("AliExpress credentials missing");
+  }
+
+  const params = {
+    app_key: appKey,
+    method: "aliexpress.affiliate.category.get",
+    tracking_id: "acashmarketplace",
+    sign_method: "md5",
+    timestamp: Date.now().toString(),
+  };
+
+  const url = generateSignedUrl(params, appSecret);
+  const response = await fetch(url);
+  const responseText = await response.text();
+
+  console.log("AliExpress category response:", responseText.slice(0, 1000));
+
+  if (!response.ok) {
+    throw new Error(`AliExpress category API error: ${response.status}`);
+  }
+
+  const data = JSON.parse(responseText);
+
+  // Find the array containing category records
+  function findCategoryArray(value) {
+    if (!value || typeof value !== "object") return null;
+
+    if (Array.isArray(value)) {
+      if (
+        value.length > 0 &&
+        value.some(item =>
+          item &&
+          item.category_id != null &&
+          item.category_name
+        )
+      ) {
+        return value;
+      }
+
+      for (const item of value) {
+        const result = findCategoryArray(item);
+        if (result) return result;
+      }
+    } else {
+      for (const item of Object.values(value)) {
+        const result = findCategoryArray(item);
+        if (result) return result;
+      }
+    }
+
+    return null;
+  }
+
+  const categories = findCategoryArray(data);
+
+  if (!categories) {
+    throw new Error("Could not find category records in AliExpress response");
+  }
+
+  aliExpressCategoriesCache = categories;
+
+  console.log(`Loaded ${categories.length} AliExpress categories`);
+
+  return categories;
+}
+
 /* =======================
    API ROUTES
    ======================= */
@@ -244,6 +326,24 @@ app.get("/api/search", async (req, res) => {
   } catch (err) {
     console.error("API Error:", err);
     res.status(500).json({ error: "Failed to fetch products" });
+  }
+});
+
+// --- Get categories ---
+app.get("/api/categories", async (req, res) => {
+  try {
+    const categories = await getAliExpressCategories();
+
+    res.json({
+      total: categories.length,
+      categories
+    });
+  } catch (err) {
+    console.error("Category API Error:", err);
+
+    res.status(500).json({
+      error: "Failed to fetch AliExpress categories"
+    });
   }
 });
 
